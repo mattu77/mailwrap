@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { writeFile, unlink, mkdir } from 'node:fs/promises'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import type { Service, Settings } from '../shared'
+import { SERVICE_NAME, normalizeWebmailUrl, type Service, type Settings } from '../shared'
 import * as acc from './accounts'
 import { installNotifications } from './notifications'
 import { installHttpAuth, forgetAllCreds } from './httpauth'
@@ -65,8 +65,14 @@ function main(): void {
 
   ipcMain.handle('accounts:list', () => st.store.get('accounts'))
   ipcMain.handle('accounts:active', () => acc.getActive())
-  ipcMain.handle('accounts:add', (_e, service: Service, label: string) => {
-    const a = st.addAccount(service, label)
+  ipcMain.handle('accounts:add', (_e, service: Service, label: string, url?: string) => {
+    if (!Object.hasOwn(SERVICE_NAME, service)) throw new Error(`unknown service ${service}`)
+    let webmail: string | undefined
+    if (service === 'roundcube') {
+      webmail = normalizeWebmailUrl(url ?? '') ?? undefined
+      if (!webmail) throw new Error('invalid webmail address')
+    }
+    const a = st.addAccount(service, label, webmail)
     acc.ensureView(a)
     acc.setActive(a.id)
     refresh()

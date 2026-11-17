@@ -1,12 +1,15 @@
-export type Service = 'gmail' | 'outlook' | 'outlook365'
+export type Service = 'gmail' | 'outlook' | 'outlook365' | 'roundcube'
 
 export interface Account {
   id: string
   service: Service
   label: string
+  /** Self-hosted services (Roundcube): the webmail address the user entered. */
+  url?: string
 }
 
-export const SERVICE_URL: Record<Service, string> = {
+/** Fixed start pages of the hosted services. Self-hosted ones use `Account.url` (see startUrl). */
+export const SERVICE_URL: Record<Exclude<Service, 'roundcube'>, string> = {
   gmail: 'https://mail.google.com/mail/u/0/',
   outlook: 'https://outlook.live.com/mail/',
   outlook365: 'https://outlook.office.com/mail/'
@@ -15,7 +18,36 @@ export const SERVICE_URL: Record<Service, string> = {
 export const SERVICE_NAME: Record<Service, string> = {
   gmail: 'Gmail',
   outlook: 'Outlook.com',
-  outlook365: 'Outlook 365'
+  outlook365: 'Outlook 365',
+  roundcube: 'Roundcube'
+}
+
+export function startUrl(a: Account): string {
+  return a.service === 'roundcube' ? (a.url ?? 'about:blank') : SERVICE_URL[a.service]
+}
+
+/** Host of a self-hosted account's webmail; it is treated like a mail-app host for that account only. */
+export function ownHost(a: Account): string {
+  if (a.service !== 'roundcube' || !a.url) return ''
+  try {
+    return new URL(a.url).hostname
+  } catch {
+    return ''
+  }
+}
+
+/** Validates a user-entered webmail address. Adds https:// when no scheme is given; only http(s) is accepted. */
+export function normalizeWebmailUrl(input: string): string | null {
+  const raw = input.trim()
+  if (!raw) return null
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`)
+    if ((u.protocol !== 'https:' && u.protocol !== 'http:') || !u.hostname) return null
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return null
+  }
 }
 
 /** Sign-in hosts: allowed as popups and as in-view navigation. */
@@ -53,7 +85,7 @@ export interface Settings {
 export interface ShellApi {
   getAccounts(): Promise<Account[]>
   getActive(): Promise<string | null>
-  addAccount(service: Service, label: string): Promise<Account>
+  addAccount(service: Service, label: string, url?: string): Promise<Account>
   removeAccount(id: string): Promise<void>
   renameAccount(id: string, label: string): Promise<void>
   moveAccount(id: string, dir: -1 | 1): Promise<void>

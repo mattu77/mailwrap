@@ -9,7 +9,7 @@ files:
   - package.json
 linux:
   syncDesktopName: true
-  target: [AppImage, rpm, deb]
+  target: [AppImage, rpm, deb, pacman]
   category: Network;Email
   icon: resources/icon.png
   desktop:
@@ -21,6 +21,19 @@ rpm:
   depends: []
   afterInstall: build/after-install.sh
   afterRemove: build/after-remove.sh
+pacman:
+  # electron-builder's default list names libappindicator-gtk3, which is no longer in the Arch
+  # repos, so the package would not install. These are the libraries Electron links against
+  # (gtk3 brings cairo/pango/glib/X11), plus libnotify, libsecret and xdg-utils used at run time.
+  # The default install/remove scripts are kept: they suit pacman's hooks.
+  depends: [alsa-lib, at-spi2-core, gtk3, libcups, libnotify, libsecret, libxkbcommon, mesa, nss, systemd-libs, xdg-utils]
+  # Arch's own format: zstd and the standard file name (pacman, repo-add and paccache expect it).
+  # Written as x86_64 because ${arch} expands to "x64" here; only x64 is built for Linux.
+  # The zstd level comes from ZSTD_CLEVEL in the dist:linux script (fpm's tar uses level 3 otherwise).
+  artifactName: ${name}-${version}-1-x86_64.pkg.tar.zst
+  # electron-builder writes the description Debian-style ("synopsis\n text"), which leaves
+  # pacman's pkgdesc empty; this one-line override comes later on fpm's command line and wins.
+  fpm: ['--description', 'Desktop wrapper for Gmail, Outlook and Roundcube with multi-account support', '--pacman-compression', 'zstd']
 deb:
   depends: []
   afterInstall: build/after-install.sh

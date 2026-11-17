@@ -1,7 +1,7 @@
 {
   "name": "mailwrap",
   "version": "0.1.3",
-  "description": "Desktop wrapper for Gmail and Outlook with multi-account support",
+  "description": "Desktop wrapper for Gmail, Outlook and Roundcube with multi-account support",
   "main": "out/main/index.js",
   "author": {
     "name": "Mateusz Ryczko",
@@ -14,7 +14,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "dist:linux": "electron-vite build && electron-builder --linux",
+    "dist:linux": "electron-vite build && ZSTD_CLEVEL=19 ZSTD_NBTHREADS=0 electron-builder --linux",
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:mac": "electron-vite build && electron-builder --mac"
   },

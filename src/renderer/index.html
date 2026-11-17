@@ -16,7 +16,7 @@
 <main id="empty">
   <div>
     <h1>Mailwrap</h1>
-    <p>No accounts yet. Click <b>+</b> to add a Gmail or Outlook account.</p>
+    <p>No accounts yet. Click <b>+</b> to add a Gmail, Outlook or Roundcube account.</p>
   </div>
 </main>
 
@@ -28,7 +28,12 @@
         <option value="gmail">Gmail</option>
         <option value="outlook">Outlook.com (personal)</option>
         <option value="outlook365">Outlook 365 (work / school)</option>
+        <option value="roundcube">Roundcube (self-hosted webmail)</option>
       </select>
+    </label>
+    <label id="url-row" hidden>Webmail address
+      <input name="url" type="text" inputmode="url" spellcheck="false" placeholder="https://webmail.example.com" autocomplete="off" />
+      <p class="error" id="url-error" hidden>Enter an http:// or https:// address.</p>
     </label>
     <label>Label <input name="label" placeholder="e.g. Work" required autocomplete="off" /></label>
     <menu>

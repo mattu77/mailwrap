@@ -1,4 +1,4 @@
-import type { Account, Service, ShellApi } from '../shared'
+import { normalizeWebmailUrl, type Account, type Service, type ShellApi } from '../shared'
 
 declare global {
   interface Window { mailwrap: ShellApi }
@@ -67,15 +67,41 @@ api.onRename((id) => {
   open($renameDialog)
 })
 
+const $service = $addDialog.querySelector('[name=service]') as HTMLSelectElement
+const $url = $addDialog.querySelector('[name=url]') as HTMLInputElement
+const $urlRow = document.getElementById('url-row')!
+const $urlError = document.getElementById('url-error')!
+// Self-hosted webmail needs its address; the hosted services have fixed ones.
+const syncUrlRow = (): void => {
+  const needed = $service.value === 'roundcube'
+  $urlRow.hidden = !needed
+  $url.required = needed
+  $urlError.hidden = true
+}
+$service.addEventListener('change', syncUrlRow)
+$url.addEventListener('input', () => ($urlError.hidden = true))
 document.getElementById('add')!.onclick = () => {
   ;($addDialog.querySelector('[name=label]') as HTMLInputElement).value = ''
+  $url.value = ''
+  syncUrlRow()
   open($addDialog)
 }
 $addDialog.querySelector('.cancel')!.addEventListener('click', () => $addDialog.close('cancel'))
+// Validated here rather than with type=url, which would reject "webmail.example.com" (https:// is added).
+$addDialog.querySelector('form')!.addEventListener('submit', (e) => {
+  if ($service.value !== 'roundcube') return
+  if (!normalizeWebmailUrl($url.value)) {
+    e.preventDefault()
+    $urlError.hidden = false
+    $url.focus()
+  }
+})
 $addDialog.addEventListener('close', () => {
   if ($addDialog.returnValue !== 'ok') return
   const fd = new FormData($addDialog.querySelector('form')!)
-  api.addAccount(fd.get('service') as Service, String(fd.get('label')))
+  const service = fd.get('service') as Service
+  const url = service === 'roundcube' ? normalizeWebmailUrl(String(fd.get('url'))) ?? undefined : undefined
+  api.addAccount(service, String(fd.get('label')), url)
 })
 
 document.getElementById('settings')!.onclick = async () => {

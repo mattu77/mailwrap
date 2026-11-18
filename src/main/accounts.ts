@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, session, shell, app, Session } from 'electron'
+import { BrowserWindow, WebContentsView, session, shell, app, Session, Menu, clipboard, type MenuItemConstructorOptions } from 'electron'
 
 /** Indirection so the self-test can observe hand-offs to the system browser. */
 export let openExternal: (url: string) => void = (url) => void shell.openExternal(url)
@@ -10,6 +10,9 @@ export const extraInside = new Set<string>()
 const inside = (h: string): boolean => staysInside(h) || extraInside.has(h)
 import { join } from 'node:path'
 import { AUTH_HOST_RE, MAIL_HOST_RE, SERVICE_URL, staysInside, type Account } from '../shared'
+
+// Pages that mean "session over": Microsoft/ADFS sign-out landings and OWA logoff.
+const SIGNED_OUT_RE = /\/(logout|logoutsession|logoff\.owa|signout)(\?|\/|$)|wa=wsignout1\.0|\/logout\.srf/i
 import { partitionFor, store } from './store'
 import { SIDEBAR_WIDTH } from './window'
 
@@ -66,9 +69,18 @@ function layout(): void {
   const [w, h] = host.getContentSize()
   for (const [id, v] of views) {
     v.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, w - SIDEBAR_WIDTH), height: h })
-    v.setVisible(id === activeId && !overlayOpen)
+    // Background accounts stay visible *underneath* the active one: a view hidden with
+    // setVisible(false) gets no animation frames, which stalls the mail apps' list updates and
+    // with them new-mail notifications. Only shell dialogs hide the views.
+    v.setVisible(!overlayOpen)
+  }
+  const top = activeId ? views.get(activeId) : undefined
+  if (top && top !== raised) {
+    host.contentView.addChildView(top) // re-adding moves it to the top of the stack
+    raised = top
   }
 }
+let raised: WebContentsView | undefined
 
 export function ensureView(acct: Account): WebContentsView {
   let v = views.get(acct.id)
@@ -171,6 +183,64 @@ export function ensureView(acct: Account): WebContentsView {
     if (v!.webContents.canGoBack()) v!.webContents.goBack()
     else v!.webContents.loadURL(SERVICE_URL[acct.service])
   })
+  // Chromium shows no context menu of its own in Electron; build one for links, images and text.
+  // (Where the mail app draws its own menu it cancels the event and this never fires.)
+  v.webContents.on('context-menu', (_e, p) => {
+    const items: MenuItemConstructorOptions[] = []
+    const sep = (): void => {
+      if (items.length && items[items.length - 1].type !== 'separator') items.push({ type: 'separator' })
+    }
+    if (p.linkURL) {
+      const mail = /^mailto:/i.test(p.linkURL)
+      const link = mail ? decodeURIComponent(p.linkURL.replace(/^mailto:/i, '').split('?')[0]) : p.linkURL
+      if (!mail && /^https?:/i.test(link)) items.push({ label: 'Open link in browser', click: () => external(link, 'menu') })
+      items.push({ label: mail ? 'Copy email address' : 'Copy link address', click: () => clipboard.writeText(link) })
+      if (p.linkText.trim()) items.push({ label: 'Copy link text', click: () => clipboard.writeText(p.linkText.trim()) })
+    }
+    if (p.mediaType === 'image' && p.srcURL) {
+      sep()
+      items.push({ label: 'Copy image', click: () => v!.webContents.copyImageAt(p.x, p.y) })
+      if (/^https?:/i.test(p.srcURL)) {
+        items.push({ label: 'Copy image address', click: () => clipboard.writeText(p.srcURL) })
+        items.push({ label: 'Save image…', click: () => v!.webContents.downloadURL(p.srcURL) })
+      }
+    }
+    if (p.isEditable) {
+      sep()
+      for (const sug of p.dictionarySuggestions.slice(0, 5))
+        items.push({ label: sug, click: () => v!.webContents.replaceMisspelling(sug) })
+      sep()
+      items.push(
+        { role: 'undo', enabled: p.editFlags.canUndo },
+        { role: 'redo', enabled: p.editFlags.canRedo },
+        { type: 'separator' },
+        { role: 'cut', enabled: p.editFlags.canCut },
+        { role: 'copy', enabled: p.editFlags.canCopy },
+        { role: 'paste', enabled: p.editFlags.canPaste },
+        { role: 'pasteAndMatchStyle', enabled: p.editFlags.canPaste },
+        { role: 'selectAll', enabled: p.editFlags.canSelectAll }
+      )
+    } else if (p.selectionText.trim()) {
+      sep()
+      items.push({ role: 'copy' })
+    }
+    if (!items.length) return
+    Menu.buildFromTemplate(items).popup({ window: host ?? undefined })
+  })
+  // Outlook ends an expired session on a "You've been signed out" page (login.microsoftonline.com
+  // /logout, ADFS wsignout, owa/logoff) and stays there. Restarting the app fixes it, so do the
+  // equivalent: once the sign-out has settled, load the mailbox again, which re-runs the sign-in
+  // (saved HTTP credentials answer the federated WIA challenge without a prompt).
+  let signedOutTimer: NodeJS.Timeout | undefined
+  v.webContents.on('did-finish-load', () => {
+    const url = v!.webContents.getURL()
+    if (!SIGNED_OUT_RE.test(url)) return
+    if (process.env.MAILWRAP_DEBUG) console.log(`[mailwrap] ${acct.label}: signed-out page, reloading mailbox`)
+    clearTimeout(signedOutTimer)
+    signedOutTimer = setTimeout(() => {
+      if (v && SIGNED_OUT_RE.test(v.webContents.getURL())) v.webContents.loadURL(SERVICE_URL[acct.service])
+    }, 2000)
+  })
   v.webContents.on('render-process-gone', () => v?.webContents.reload())
   if (process.env.MAILWRAP_DEBUG) {
     const wc = v.webContents
@@ -184,6 +254,7 @@ export function ensureView(acct: Account): WebContentsView {
   }
   v.webContents.loadURL(SERVICE_URL[acct.service])
   host?.contentView.addChildView(v)
+  raised = undefined // new view sits on top; let layout() restore the active one
   views.set(acct.id, v)
   layout()
   return v

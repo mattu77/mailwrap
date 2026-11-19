@@ -149,6 +149,15 @@ function rowParts(el: HTMLElement): { sender: string; subject: string } {
   }
   return { sender: sender.slice(0, 120), subject: subject.slice(0, 200) }
 }
+const notifiedSig = new Set<string>()
+/** Full date from the time cell's tooltip (e.g. "So, 14.11.2026 00:48"), '' when absent. */
+function rowDate(el: HTMLElement): string {
+  for (const e of Array.from(el.querySelectorAll<HTMLElement>('[title]'))) {
+    const t = e.getAttribute('title') ?? ''
+    if (DATE_TITLE.test(t)) return t
+  }
+  return ''
+}
 function primeSeen(): void {
   for (const r of listRows()) {
     const id = rowId(r)
@@ -202,10 +211,17 @@ function outlookScan(): void {
   if (!inNotifiableFolder()) return
   for (const r of [...fresh, ...flipped]) {
     if (!rowIsUnread(r)) continue
+    const { sender, subject } = rowParts(r)
+    // One notification per message: the same row can look "new" again (re-render with a different
+    // id, unread flag flickering while the list refreshes), so key on what the user would see.
+    const sig = `${sender}|${subject}|${rowDate(r)}`
+    if (DEBUG) ipcRenderer.send('debug', `row ${fresh.includes(r) ? 'fresh' : 'flipped'} id=${rowId(r)} sig=${sig} dup=${notifiedSig.has(sig)}`)
+    lastRowNotify = Date.now()
+    if (notifiedSig.has(sig)) continue
+    notifiedSig.add(sig)
+    if (notifiedSig.size > 500) notifiedSig.delete(notifiedSig.values().next().value as string)
     const nid = synthSeq++
     synthetic.set(nid, rowId(r))
-    const { sender, subject } = rowParts(r)
-    lastRowNotify = Date.now()
     ipcRenderer.send('notify', { nid, title: sender || 'New mail', body: subject, synthetic: true } as NotifyPayload)
   }
 }

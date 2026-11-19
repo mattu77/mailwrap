@@ -1,6 +1,6 @@
 {
   "name": "mailwrap",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Desktop wrapper for Gmail and Outlook with multi-account support",
   "main": "out/main/index.js",
   "author": {

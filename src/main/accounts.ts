@@ -134,22 +134,23 @@ export function ensureView(acct: Account): WebContentsView {
     external(url, 'window.open')
     return { action: 'deny' }
   })
-  // Auth popups: fold the mail app back into the view; anything else leaving the sign-in hosts goes external.
+  // Auth popups: only sign-in hosts can open one, so the whole popup is a sign-in flow. Federated
+  // identity providers (e.g. a corporate ADFS) live on arbitrary hosts, so every page stays in the
+  // popup; only the mail app is folded back into the view.
   v.webContents.on('did-create-window', (popup) => {
     const route = (e: Electron.Event | null, url: string): void => {
-      const h = hostOf(url)
-      if (MAIL_HOST_RE.test(h)) {
-        e?.preventDefault()
-        v!.webContents.loadURL(url)
-        popup.close()
-      } else if (h && !AUTH_HOST_RE.test(h) && !AUTH_HOST_RE.test(hostOf(popup.webContents.getURL()))) {
-        e?.preventDefault()
-        external(url, 'popup')
-        popup.close()
-      }
+      if (!MAIL_HOST_RE.test(hostOf(url))) return
+      e?.preventDefault()
+      v!.webContents.loadURL(url)
+      popup.close()
     }
     popup.webContents.on('will-navigate', (e, url) => route(e, url))
     popup.webContents.on('did-navigate', (_e, url) => route(null, url))
+    // A link the sign-in page opens in a new window (help, privacy statement) goes to the browser.
+    popup.webContents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:/.test(url)) external(url, 'popup window.open')
+      return { action: 'deny' }
+    })
   })
   // The chain must start when a navigation *towards* a sign-in host begins: Microsoft's authorize
   // endpoint answers with a 302 straight to the federated IdP, so the view never "lands" on it.

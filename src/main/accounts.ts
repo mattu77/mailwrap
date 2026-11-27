@@ -9,7 +9,7 @@ export function setOpenExternal(fn: (url: string) => void): void {
 export const extraInside = new Set<string>()
 const inside = (h: string): boolean => staysInside(h) || extraInside.has(h)
 import { join } from 'node:path'
-import { AUTH_HOST_RE, MAIL_HOST_RE, SERVICE_URL, staysInside, type Account } from '../shared'
+import { AUTH_HOST_RE, MAIL_HOST_RE, homeUrl, staysInside, type Account } from '../shared'
 
 // Pages that mean "session over": Microsoft/ADFS sign-out landings and OWA logoff.
 const SIGNED_OUT_RE = /\/(logout|logoutsession|logoff\.owa|signout)(\?|\/|$)|wa=wsignout1\.0|\/logout\.srf/i
@@ -95,7 +95,7 @@ export function ensureView(acct: Account): WebContentsView {
       sandbox: true,
       spellcheck: true,
       backgroundThrottling: false,
-      additionalArguments: [`--mailwrap-account=${acct.id}`, ...(process.env.MAILWRAP_SELFTEST ? ['--mailwrap-fake-outlook'] : []), ...(process.env.MAILWRAP_DEBUG ? ['--mailwrap-debug'] : [])]
+      additionalArguments: [`--mailwrap-account=${acct.id}`, `--mailwrap-service=${acct.service}`, ...(process.env.MAILWRAP_SELFTEST ? ['--mailwrap-fake-outlook'] : []), ...(process.env.MAILWRAP_DEBUG ? ['--mailwrap-debug'] : [])]
     }
   })
   const hostOf = (url: string): string => {
@@ -105,6 +105,24 @@ export function ensureView(acct: Account): WebContentsView {
       return ''
     }
   }
+  // A self-hosted webmail (Roundcube) is the mail app for this account only.
+  const ownHost = acct.url ? hostOf(acct.url) : ''
+  const isMail = (h: string): boolean => MAIL_HOST_RE.test(h) || (!!ownHost && h === ownHost)
+  // Roundcube's login is a session cookie, which Chromium drops when the app quits; keep it like a
+  // browser restoring its session, so a restart (or a reboot within the server's session lifetime)
+  // does not ask for the password again.
+  if (ownHost) {
+    s.cookies.on('changed', (_e, c, _cause, removed) => {
+      if (removed || !c.session || !c.domain) return
+      const d = c.domain.replace(/^\./, '')
+      if (d !== ownHost && !ownHost.endsWith('.' + d)) return
+      const url = `${c.secure ? 'https' : 'http'}://${ownHost}${c.path ?? '/'}`
+      s.cookies
+        .set({ url, name: c.name, value: c.value, path: c.path, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite, ...(c.hostOnly ? {} : { domain: c.domain }), expirationDate: Date.now() / 1000 + 30 * 86400 })
+        .catch(() => undefined)
+    })
+  }
+  const insideHere = (h: string): boolean => inside(h) || isMail(h)
   // Sign-in chain: entered when the view reaches a sign-in host, left when it is back on the mail app.
   // Federated identity providers (e.g. a corporate ADFS) live on arbitrary hosts in between.
   let inAuthChain = false
@@ -126,7 +144,19 @@ export function ensureView(acct: Account): WebContentsView {
         }
       }
     }
-    if (MAIL_HOST_RE.test(h)) {
+    if (ownHost && h === ownHost) {
+      // Roundcube opens messages, compose and attachments in new windows on its own host.
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          webPreferences: { session: s, sandbox: true, contextIsolation: true },
+          autoHideMenuBar: true,
+          width: 1000,
+          height: 760
+        }
+      }
+    }
+    if (isMail(h)) {
       // e.g. sign-in flow finishing with window.open(mail.google.com): show it in this view.
       v!.webContents.loadURL(url)
       return { action: 'deny' }
@@ -137,9 +167,25 @@ export function ensureView(acct: Account): WebContentsView {
   // Auth popups: only sign-in hosts can open one, so the whole popup is a sign-in flow. Federated
   // identity providers (e.g. a corporate ADFS) live on arbitrary hosts, so every page stays in the
   // popup; only the mail app is folded back into the view.
-  v.webContents.on('did-create-window', (popup) => {
+  v.webContents.on('did-create-window', (popup, details) => {
+    // Webmail windows (Roundcube message / compose): keep them as windows, links go to the browser.
+    if (ownHost && hostOf(details.url) === ownHost) {
+      popup.webContents.on('will-navigate', (e, url) => {
+        const h = hostOf(url)
+        if (!h || insideHere(h)) return
+        e.preventDefault()
+        external(url, 'webmail window')
+      })
+      popup.webContents.setWindowOpenHandler(({ url }) => {
+        const h = hostOf(url)
+        if (h === ownHost) return { action: 'allow', overrideBrowserWindowOptions: { webPreferences: { session: s, sandbox: true, contextIsolation: true }, autoHideMenuBar: true } }
+        if (/^https?:/.test(url)) external(url, 'webmail window.open')
+        return { action: 'deny' }
+      })
+      return
+    }
     const route = (e: Electron.Event | null, url: string): void => {
-      if (!MAIL_HOST_RE.test(hostOf(url))) return
+      if (!isMail(hostOf(url))) return
       e?.preventDefault()
       v!.webContents.loadURL(url)
       popup.close()
@@ -166,7 +212,7 @@ export function ensureView(acct: Account): WebContentsView {
   v.webContents.on('will-navigate', (e, url) => {
     const h = hostOf(url)
     noteAuth(url)
-    if (!h || inside(h)) return
+    if (!h || insideHere(h)) return
     // Never break a sign-in flow: while the view sits on an auth host, let any redirect through
     // (federated IdPs such as a corporate ADFS live on arbitrary hosts).
     if (onAuthHost()) return
@@ -178,11 +224,11 @@ export function ensureView(acct: Account): WebContentsView {
   v.webContents.on('did-navigate', (_e, url) => {
     const h = hostOf(url)
     if (AUTH_HOST_RE.test(h)) inAuthChain = true
-    else if (MAIL_HOST_RE.test(h)) inAuthChain = false
-    if (!h || inside(h) || inAuthChain || h === '127.0.0.1' || h === 'localhost') return
+    else if (isMail(h)) inAuthChain = false
+    if (!h || insideHere(h) || inAuthChain || h === '127.0.0.1' || h === 'localhost') return
     if (/^https?:/.test(url)) external(url, 'landed')
     if (v!.webContents.canGoBack()) v!.webContents.goBack()
-    else v!.webContents.loadURL(SERVICE_URL[acct.service])
+    else v!.webContents.loadURL(homeUrl(acct))
   })
   // Chromium shows no context menu of its own in Electron; build one for links, images and text.
   // (Where the mail app draws its own menu it cancels the event and this never fires.)
@@ -239,7 +285,7 @@ export function ensureView(acct: Account): WebContentsView {
     if (process.env.MAILWRAP_DEBUG) console.log(`[mailwrap] ${acct.label}: signed-out page, reloading mailbox`)
     clearTimeout(signedOutTimer)
     signedOutTimer = setTimeout(() => {
-      if (v && SIGNED_OUT_RE.test(v.webContents.getURL())) v.webContents.loadURL(SERVICE_URL[acct.service])
+      if (v && SIGNED_OUT_RE.test(v.webContents.getURL())) v.webContents.loadURL(homeUrl(acct))
     }, 2000)
   })
   v.webContents.on('render-process-gone', () => v?.webContents.reload())
@@ -253,7 +299,7 @@ export function ensureView(acct: Account): WebContentsView {
       if (ev.level === 'error') console.log(`[mailwrap] ${acct.label}: console ${ev.message}`)
     })
   }
-  v.webContents.loadURL(SERVICE_URL[acct.service])
+  v.webContents.loadURL(homeUrl(acct))
   host?.contentView.addChildView(v)
   raised = undefined // new view sits on top; let layout() restore the active one
   views.set(acct.id, v)

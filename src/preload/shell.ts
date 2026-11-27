@@ -4,7 +4,7 @@ import type { ShellApi } from '../shared'
 const api: ShellApi = {
   getAccounts: () => ipcRenderer.invoke('accounts:list'),
   getActive: () => ipcRenderer.invoke('accounts:active'),
-  addAccount: (service, label) => ipcRenderer.invoke('accounts:add', service, label),
+  addAccount: (service, label, url) => ipcRenderer.invoke('accounts:add', service, label, url),
   removeAccount: (id) => ipcRenderer.invoke('accounts:remove', id),
   renameAccount: (id, label) => ipcRenderer.invoke('accounts:rename', id, label),
   moveAccount: (id, dir) => ipcRenderer.invoke('accounts:move', id, dir),

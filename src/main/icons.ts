@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Account } from '../shared'
 
 /** Same look as the sidebar badge: rounded square in the service colour with the label's initials. */
-const COLOR: Record<Account['service'], string> = { gmail: '#c5221f', outlook: '#0f6cbd', outlook365: '#0f6cbd' }
+const COLOR: Record<Account['service'], string> = { gmail: '#c5221f', outlook: '#0f6cbd', outlook365: '#0f6cbd', roundcube: '#1c7aa8' }
 const SIZE = 128
 const cache = new Map<string, Promise<NativeImage>>()
 
@@ -14,7 +14,7 @@ export function initials(label: string): string {
 }
 
 export function accountIcon(acct: Account): Promise<NativeImage> {
-  const key = `${acct.service}:${acct.label}`
+  const key = `${acct.service}:${acct.label}:v2`
   let p = cache.get(key)
   if (!p) {
     p = load(acct, key).catch(() => nativeImage.createEmpty())

@@ -67,15 +67,44 @@ api.onRename((id) => {
   open($renameDialog)
 })
 
+const $addForm = document.getElementById('add-form') as HTMLFormElement
+const $service = $addForm.elements.namedItem('service') as HTMLSelectElement
+const $url = $addForm.elements.namedItem('url') as HTMLInputElement
+const $urlRow = document.getElementById('url-row')!
+const $addError = document.getElementById('add-error')!
+const syncService = (): void => {
+  const rc = $service.value === 'roundcube'
+  $urlRow.hidden = !rc
+  $url.required = rc
+}
+$service.addEventListener('change', syncService)
 document.getElementById('add')!.onclick = () => {
   ;($addDialog.querySelector('[name=label]') as HTMLInputElement).value = ''
+  $url.value = ''
+  $addError.hidden = true
+  syncService()
   open($addDialog)
 }
 $addDialog.querySelector('.cancel')!.addEventListener('click', () => $addDialog.close('cancel'))
-$addDialog.addEventListener('close', () => {
-  if ($addDialog.returnValue !== 'ok') return
-  const fd = new FormData($addDialog.querySelector('form')!)
-  api.addAccount(fd.get('service') as Service, String(fd.get('label')))
+// Submit validates first (a bad address keeps the dialog open with a message).
+$addForm.addEventListener('submit', (e) => {
+  const fd = new FormData($addForm)
+  const service = fd.get('service') as Service
+  const url = service === 'roundcube' ? String(fd.get('url') ?? '').trim() : undefined
+  if (url !== undefined) {
+    try {
+      const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`)
+      if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.') && u.hostname !== 'localhost') throw new Error()
+    } catch {
+      e.preventDefault()
+      $addError.textContent = 'Enter the address of your Roundcube, e.g. mail.example.com'
+      $addError.hidden = false
+      return
+    }
+  }
+  e.preventDefault()
+  $addDialog.close('ok')
+  api.addAccount(service, String(fd.get('label')), url)
 })
 
 document.getElementById('settings')!.onclick = async () => {

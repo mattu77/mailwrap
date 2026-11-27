@@ -8,6 +8,7 @@ import { accountIcon } from './icons'
 export function installNotifications(): void {
   ipcMain.on('notify', async (e, p: NotifyPayload) => {
     const acctId = accountForContents(e.sender.id)
+    if (process.env.MAILWRAP_DEBUG) console.log(`[mailwrap] notify ${JSON.stringify(p)}`)
     if (!acctId || !Notification.isSupported()) return
     const acct = store.get('accounts').find((a) => a.id === acctId)
     const label = acct?.label

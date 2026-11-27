@@ -21,15 +21,18 @@
 </main>
 
 <dialog id="add-dialog">
-  <form method="dialog">
+  <form method="dialog" id="add-form">
     <h2>Add account</h2>
     <label>Service
       <select name="service">
         <option value="gmail">Gmail</option>
         <option value="outlook">Outlook.com (personal)</option>
         <option value="outlook365">Outlook 365 (work / school)</option>
+        <option value="roundcube">Roundcube (own server)</option>
       </select>
     </label>
+    <label id="url-row" hidden>Address <input name="url" type="text" placeholder="e.g. mail.example.com" autocomplete="off" spellcheck="false" /></label>
+    <p id="add-error" class="hint error" hidden></p>
     <label>Label <input name="label" placeholder="e.g. Work" required autocomplete="off" /></label>
     <menu>
       <button value="cancel" type="button" class="cancel">Cancel</button>
@@ -44,7 +47,7 @@
     <label class="row"><input type="checkbox" name="startMinimized" /> Start minimized to tray</label>
     <label class="row"><input type="checkbox" name="autostart" /> Start on login</label>
     <button type="button" id="forget-auth" class="cancel" style="margin-top:8px">Forget saved server passwords</button>
-    <p class="hint">Notifications: enable "Desktop notifications" inside Gmail / Outlook settings.
+    <p class="hint">Notifications: enable "Desktop notifications" inside Gmail / Outlook settings. Roundcube needs no setting.
       Shortcuts: Ctrl+1…9 switch account, Ctrl+Tab cycle, Ctrl+Q quit.</p>
     <menu><button value="ok">Close</button></menu>
   </form>

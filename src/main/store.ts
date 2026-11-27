@@ -28,8 +28,8 @@ export function partitionFor(id: string): string {
   return `persist:acct-${id}`
 }
 
-export function addAccount(service: Service, label: string): Account {
-  const acct: Account = { id: randomUUID(), service, label }
+export function addAccount(service: Service, label: string, url?: string): Account {
+  const acct: Account = { id: randomUUID(), service, label, ...(url ? { url } : {}) }
   store.set('accounts', [...store.get('accounts'), acct])
   return acct
 }

@@ -57,8 +57,137 @@ window.addEventListener('message', (ev) => {
   if (ev.source !== window || !d) return
   if (d.__mailwrap !== 'notify') return
   const p: NotifyPayload = { nid: d.nid, title: String(d.title ?? ''), body: d.body, icon: d.icon, tag: d.tag }
+  // Roundcube's newmail_notifier plugin says only "new message"; our per-message notification
+  // for the same refresh follows right after it, so let that one win.
+  if (isRoundcube) {
+    const at = Date.now()
+    setTimeout(() => {
+      if (rcLastSynthetic < at - 5000) ipcRenderer.send('notify', p)
+    }, 1500)
+    return
+  }
   ipcRenderer.send('notify', p)
 })
+
+// --- Roundcube -------------------------------------------------------------
+// Roundcube polls the server itself ("refresh" every minute, "check-recent" on demand) and inserts
+// new rows into the list between the request's 'responsebefore…' and 'responseafter…' events.
+// We collect unread rows inserted in that window and notify for each; the Inbox unread count
+// comes from rcmail.env.unread_counts (the title only shows the folder being viewed).
+const service = (process.argv.find((a) => a.startsWith('--mailwrap-service=')) ?? '').split('=')[1] ?? ''
+const isRoundcube = service === 'roundcube'
+const rcHook = `(() => {
+  if (window.__mailwrapRc) return;
+  window.__mailwrapRc = true;
+  const text = (el) => (el ? el.textContent : '').replace(/\\s+/g, ' ').trim();
+  const parts = (tr) => {
+    const adr = tr.querySelector('.fromto .adr [title], .from .adr [title], .fromto .rcmContactAddress, .from .rcmContactAddress, .fromto .adr, .from .adr');
+    const subj = tr.querySelector('span.subject a span, td.subject a span, span.subject a, td.subject a');
+    return { sender: text(adr), email: adr ? (adr.getAttribute('title') || '') : '', subject: text(subj) };
+  };
+  const inboxUnread = () => {
+    const c = rcmail.env.unread_counts || {};
+    return 'INBOX' in c ? c.INBOX : -1;
+  };
+  let collecting = false, fresh = [], lastUnread = -2;
+  // Messages already shown once (folder + uid). Roundcube redraws the whole list when new mail
+  // arrives, so every row is "inserted" again; only rows never seen before are new.
+  const seen = new Set();
+  const key = (uid) => rcmail.env.mailbox + '/' + uid;
+  const markListSeen = () => {
+    const rows = rcmail.message_list && rcmail.message_list.rows;
+    if (rows) for (const uid in rows) seen.add(key(uid));
+  };
+  const sendUnread = () => {
+    const n = inboxUnread();
+    if (n !== lastUnread) { lastUnread = n; window.postMessage({ __mailwrap: 'rc-unread', n }, '*'); }
+  };
+  const start = () => {
+    const before = () => { collecting = true; fresh = []; };
+    const after = () => {
+      collecting = false;
+      const list = rcmail.message_list;
+      for (const uid of fresh) {
+        if (seen.has(key(uid))) continue;
+        const row = list && list.rows && list.rows[uid];
+        const tr = row && row.obj;
+        if (!tr || !/(^|\\s)unread(\\s|$)/.test(tr.className)) continue;
+        window.postMessage(Object.assign({ __mailwrap: 'rc-new', uid: String(uid), mbox: rcmail.env.mailbox }, parts(tr)), '*');
+      }
+      fresh = [];
+      markListSeen();
+      sendUnread();
+    };
+    for (const a of ['refresh', 'check-recent']) {
+      rcmail.addEventListener('responsebefore' + a, before);
+      rcmail.addEventListener('responseafter' + a, after);
+    }
+    rcmail.addEventListener('insertrow', (e) => { if (collecting && e && e.uid != null) fresh.push(e.uid); });
+    // Other requests (opening a folder, reading a message): their rows are not new mail.
+    // 'responseafter' fires before 'responseafter<action>', so refresh results are left to after().
+    rcmail.addEventListener('responseafter', (e) => {
+      const a = e && e.response && e.response.action;
+      if (a === 'refresh' || a === 'check-recent') return;
+      markListSeen();
+      sendUnread();
+    });
+    rcmail.addEventListener('listupdate', () => { if (!collecting) markListSeen(); });
+    rcmail.addEventListener('init', () => { markListSeen(); sendUnread(); });
+    markListSeen();
+    sendUnread();
+  };
+  const wait = () => (window.rcmail && rcmail.addEventListener ? start() : setTimeout(wait, 200));
+  wait();
+  window.__mailwrapRcOpen = (uid, mbox) => {
+    if (rcmail.env.mailbox === mbox && rcmail.message_list && rcmail.message_list.rows[uid]) {
+      rcmail.message_list.select(uid);
+      if (!rcmail.env.contentframe) rcmail.show_message(uid);
+    } else {
+      rcmail.location_href({ _task: 'mail', _action: 'show', _uid: uid, _mbox: mbox }, window);
+    }
+  };
+})();`
+let rcLastSynthetic = 0
+let rcInbox = -1
+const rcPending = new Map<number, string>() // nid -> uid|mbox
+function rcNotify(p: NotifyPayload): void {
+  ipcRenderer.send('notify', p)
+}
+if (isRoundcube) {
+  const inject = (): void => void webFrame.executeJavaScript(rcHook).catch(() => undefined)
+  window.addEventListener('DOMContentLoaded', inject)
+  window.addEventListener('message', (ev) => {
+    const d = ev.data
+    if (ev.source !== window || !d) return
+    if (d.__mailwrap === 'rc-new') {
+      rcLastSynthetic = Date.now()
+      const nid = synthSeq++
+      rcPending.set(nid, `${d.uid}|${d.mbox}`)
+      const title = String(d.sender || d.email || 'New mail')
+      rcNotify({ nid, title, body: String(d.subject ?? ''), synthetic: true })
+    } else if (d.__mailwrap === 'rc-unread') {
+      const n = Number(d.n)
+      if (n < 0) return
+      // Mail that arrived while the Inbox list is not shown (other folder, settings) has no row.
+      if (rcInbox >= 0 && n > rcInbox && Date.now() - rcLastSynthetic > 5000) {
+        const delta = n - rcInbox
+        rcNotify({ nid: synthSeq++, title: 'New mail', body: `${delta} new message${delta > 1 ? 's' : ''}`, synthetic: true })
+      }
+      rcInbox = n
+      if (n !== last) {
+        last = n
+        ipcRenderer.send('unread', n)
+      }
+    }
+  })
+  ipcRenderer.on('notify-click', (_e, nid: number) => {
+    const t = rcPending.get(nid)
+    if (!t) return
+    rcPending.delete(nid)
+    const [uid, mbox] = t.split('|')
+    webFrame.executeJavaScript(`window.__mailwrapRcOpen && window.__mailwrapRcOpen(${JSON.stringify(uid)}, ${JSON.stringify(mbox)})`).catch(() => undefined)
+  })
+}
 
 // --- Unread count from <title> --------------------------------------------
 // Gmail: "Inbox (12) - user@gmail.com - Gmail"; Outlook: "(12) Mail - user - Outlook"
@@ -68,6 +197,7 @@ function parseUnread(title: string): number {
 }
 let last = -1
 function report(): void {
+  if (isRoundcube) return
   const n = parseUnread(document.title)
   if (n !== last) {
     last = n

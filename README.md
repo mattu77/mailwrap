@@ -1,7 +1,7 @@
 # Mailwrap
 
-Desktop wrapper for Gmail and Outlook (personal and Microsoft 365) with multiple
-accounts per service, native new-mail notifications and a tray icon. Closing the
+Desktop wrapper for Gmail, Outlook (personal and Microsoft 365) and self-hosted
+Roundcube webmail, with multiple accounts per service, native new-mail notifications and a tray icon. Closing the
 window hides it to the tray; **Quit** in the tray menu exits.
 
 Built with Electron + TypeScript. Linux first (KDE/GNOME), Windows and macOS from
@@ -15,9 +15,15 @@ the same source.
   forwards to a native desktop notification. Clicking it focuses the right
   account and opens the message. You must enable **Desktop notifications** once
   in Gmail / Outlook settings.
+- Roundcube: add the account with your webmail address (e.g. `mail.example.com`).
+  Notifications need no setting: new rows that Roundcube adds on its periodic
+  refresh are announced with sender and subject; mail arriving while another
+  folder is open is announced from the Inbox unread count. The login survives
+  app restarts while the server-side session is still valid.
 - Unread count is parsed from the page title and shown as a badge in the sidebar
   and in the tray icon tooltip (icon gets a red dot when > 0).
-- Links outside Google/Microsoft domains open in the system browser.
+- Links outside Google/Microsoft domains (or the account's own Roundcube host)
+  open in the system browser.
 
 Shortcuts: `Ctrl+1…9` switch account, `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle,
 `Ctrl+Q` quit. Right-click an account for reload / rename / reorder / remove.
